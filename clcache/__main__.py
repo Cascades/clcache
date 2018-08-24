@@ -42,7 +42,7 @@ try:
 except ImportError:
     WALK = os.walk
     try:
-        LIST = os.scandir # pylint: disable=no-name-in-module
+        LIST = os.scandir # type: ignore # pylint: disable=no-name-in-module
     except AttributeError:
         LIST = os.listdir
 
@@ -94,7 +94,7 @@ def filesBeneath(baseDir):
 
 
 def childDirectories(path, absolute=True):
-    supportsScandir = (LIST != os.listdir)
+    supportsScandir = (LIST != os.listdir) # pylint: disable=comparison-with-callable
     for entry in LIST(path):
         if supportsScandir:
             if entry.is_dir():
@@ -115,6 +115,44 @@ def normalizeBaseDir(baseDir):
         # Converts empty string to None
         return None
 
+
+class SuspendTracker():
+    fileTracker = None
+    def __init__(self):
+        if not SuspendTracker.fileTracker:
+            if windll.kernel32.GetModuleHandleW("FileTracker.dll"):
+                SuspendTracker.fileTracker = windll.FileTracker
+            elif windll.kernel32.GetModuleHandleW("FileTracker32.dll"):
+                SuspendTracker.fileTracker = windll.FileTracker32
+
+    def __enter__(self):
+        SuspendTracker.suspend()
+
+    def __exit__(self, typ, value, traceback):
+        SuspendTracker.resume()
+
+    @staticmethod
+    def suspend():
+        if SuspendTracker.fileTracker:
+            SuspendTracker.fileTracker.SuspendTracking()
+
+    @staticmethod
+    def resume():
+        if SuspendTracker.fileTracker:
+            SuspendTracker.fileTracker.ResumeTracking()
+
+def isTrackerEnabled():
+    return 'TRACKER_ENABLED' in os.environ
+
+def untrackable(func):
+    if not isTrackerEnabled():
+        return func
+
+    def untrackedFunc(*args, **kwargs):
+        with SuspendTracker():
+            return func(*args, **kwargs)
+
+    return untrackedFunc
 
 @contextlib.contextmanager
 def atomicWrite(fileName):
@@ -163,7 +201,7 @@ class LogicException(Exception):
         return repr(self.message)
 
 
-class Manifest(object):
+class Manifest:
     def __init__(self, entries=None):
         if entries is None:
             entries = []
@@ -182,7 +220,7 @@ class Manifest(object):
         self._entries.insert(0, self._entries.pop(entryIndex))
 
 
-class ManifestSection(object):
+class ManifestSection:
     def __init__(self, manifestSectionDir):
         self.manifestSectionDir = manifestSectionDir
         self.lock = CacheLock.forPath(self.manifestSectionDir)
@@ -193,6 +231,7 @@ class ManifestSection(object):
     def manifestFiles(self):
         return filesBeneath(self.manifestSectionDir)
 
+    @untrackable
     def setManifest(self, manifestHash, manifest):
         manifestPath = self.manifestPath(manifestHash)
         printTraceStatement("Writing manifest with manifestHash = {} to {}".format(manifestHash, manifestPath))
@@ -203,6 +242,7 @@ class ManifestSection(object):
             jsonobject = {'entries': entries}
             json.dump(jsonobject, outFile, sort_keys=True, indent=2)
 
+    @untrackable
     def getManifest(self, manifestHash):
         fileName = self.manifestPath(manifestHash)
         if not os.path.exists(fileName):
@@ -231,7 +271,7 @@ def allSectionsLocked(repository):
             section.lock.release()
 
 
-class ManifestRepository(object):
+class ManifestRepository:
     # Bump this counter whenever the current manifest file format changes.
     # E.g. changing the file format from {'oldkey': ...} to {'newkey': ...} requires
     # invalidation, such that a manifest that was stored using the old format is not
@@ -308,7 +348,7 @@ class ManifestRepository(object):
         return HashAlgorithm(','.join(listOfHashes).encode()).hexdigest()
 
 
-class CacheLock(object):
+class CacheLock:
     """ Implements a lock for the object cache which
     can be used in 'with' statements. """
     INFINITE = 0xFFFFFFFF
@@ -364,7 +404,7 @@ class CacheLock(object):
         return CacheLock(lockName, timeoutMs)
 
 
-class CompilerArtifactsSection(object):
+class CompilerArtifactsSection:
     OBJECT_FILE = 'object'
     STDOUT_FILE = 'output.txt'
     STDERR_FILE = 'stderr.txt'
@@ -413,7 +453,7 @@ class CompilerArtifactsSection(object):
             )
 
 
-class CompilerArtifactsRepository(object):
+class CompilerArtifactsRepository:
     def __init__(self, compilerArtifactsRootDir):
         self._compilerArtifactsRootDir = compilerArtifactsRootDir
 
@@ -501,7 +541,7 @@ class CompilerArtifactsRepository(object):
         return [arg for arg in cmdline
                 if not (arg[0] in "/-" and arg[1:].startswith(argsToStrip))]
 
-class CacheFileStrategy(object):
+class CacheFileStrategy:
     def __init__(self, cacheDirectory=None):
         self.dir = cacheDirectory
         if not self.dir:
@@ -591,7 +631,7 @@ class CacheFileStrategy(object):
         stats.setNumCacheEntries(currentCompilerArtifactsCount)
 
 
-class Cache(object):
+class Cache:
     def __init__(self, cacheDirectory=None):
         if os.environ.get("CLCACHE_MEMCACHED"):
             from .storage import CacheFileWithMemcacheFallbackStrategy
@@ -644,7 +684,7 @@ class Cache(object):
         return self.strategy.getManifest(manifestHash)
 
 
-class PersistentJSONDict(object):
+class PersistentJSONDict:
     def __init__(self, fileName):
         self._dirty = False
         self._dict = {}
@@ -676,7 +716,7 @@ class PersistentJSONDict(object):
         return type(self) is type(other) and self.__dict__ == other.__dict__
 
 
-class Configuration(object):
+class Configuration:
     _defaultValues = {"MaximumCacheSize": 1073741824} # 1 GiB
 
     def __init__(self, configurationFile):
@@ -701,7 +741,7 @@ class Configuration(object):
         self._cfg["MaximumCacheSize"] = size
 
 
-class Statistics(object):
+class Statistics:
     CALLS_WITH_INVALID_ARGUMENT = "CallsWithInvalidArgument"
     CALLS_WITHOUT_SOURCE_FILE = "CallsWithoutSourceFile"
     CALLS_WITH_MULTIPLE_SOURCE_FILES = "CallsWithMultipleSourceFiles"
@@ -741,6 +781,7 @@ class Statistics(object):
         self._stats = None
         self.lock = CacheLock.forPath(self._statsFile)
 
+    @untrackable
     def __enter__(self):
         self._stats = PersistentJSONDict(self._statsFile)
         for k in Statistics.RESETTABLE_KEYS | Statistics.NON_RESETTABLE_KEYS:
@@ -748,6 +789,7 @@ class Statistics(object):
                 self._stats[k] = 0
         return self
 
+    @untrackable
     def __exit__(self, typ, value, traceback):
         # Does not write to disc when unchanged
         self._stats.save()
@@ -1026,7 +1068,7 @@ def printTraceStatement(msg: str) -> None:
             print(os.path.join(scriptDir, "clcache.py") + " " + msg)
 
 
-class CommandLineTokenizer(object):
+class CommandLineTokenizer:
     def __init__(self, content):
         self.argv = []
         self._content = content
@@ -1154,7 +1196,7 @@ def extendCommandLineFromEnvironment(cmdLine, environment):
     return cmdLine, remainingEnvironment
 
 
-class Argument(object):
+class Argument:
     def __init__(self, name):
         self.name = name
 
@@ -1192,7 +1234,7 @@ class ArgumentT4(Argument):
     pass
 
 
-class CommandLineAnalyzer(object):
+class CommandLineAnalyzer:
 
     @staticmethod
     def _getParameterizedArgumentType(cmdLineArgument):
@@ -1645,7 +1687,13 @@ def scheduleJobs(cache: Any, compiler: str, cmdLine: List[str], environment: Any
 
     exitCode = 0
     cleanupRequired = False
-    with concurrent.futures.ThreadPoolExecutor(max_workers=jobCount(cmdLine)) as executor:
+
+    def poolExecutor(*args, **kwargs) -> concurrent.futures.Executor:
+        if isTrackerEnabled():
+            return concurrent.futures.ProcessPoolExecutor(*args, **kwargs)
+        return concurrent.futures.ThreadPoolExecutor(*args, **kwargs)
+
+    with poolExecutor(max_workers=min(jobCount(cmdLine), len(objectFiles))) as executor:
         jobs = []
         for (srcFile, srcLanguage), objFile in zip(sourceFiles, objectFiles):
             jobCmdLine = baseCmdLine + [srcLanguage + srcFile]
